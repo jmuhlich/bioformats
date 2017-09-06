@@ -60,12 +60,14 @@ public class OperettaReader extends FormatReader {
   // -- Constants --
 
   private static final String XML_FILE = "Index.idx.xml";
+  private static final String XML_FILE_REF = "Index.ref.xml";
   private static final int XML_TAG = 65500;
 
   // -- Fields --
 
   private Plane[][] planes;
   private MinimalTiffReader reader;
+  private boolean isReferenced;
 
   // -- Constructor --
 
@@ -104,7 +106,7 @@ public class OperettaReader extends FormatReader {
   @Override
   public boolean isThisType(String name, boolean open) {
     String localName = new Location(name).getName();
-    if (localName.equals(XML_FILE)) {
+    if (localName.equals(XML_FILE) || localName.equals(XML_FILE_REF)) {
       return true;
     }
     Location parent = new Location(name).getAbsoluteFile().getParentFile();
@@ -207,10 +209,16 @@ public class OperettaReader extends FormatReader {
       super.initFile(id);
     }
 
+    // Check if this is the "referenced images" format
+
+    if (id.endsWith(XML_FILE_REF)) {
+      isReferenced = true;
+    }
+
     // parse plate layout and image dimensions from the XML file
 
     String xmlData = DataTools.readFile(id);
-    OperettaHandler handler = new OperettaHandler();
+    OperettaHandler handler = new OperettaHandler(isReferenced);
     XMLTools.parseXML(xmlData, handler);
 
     // sort the list of images by well and field indices
@@ -322,8 +330,10 @@ public class OperettaReader extends FormatReader {
         ms.sizeX = planes[i][planeIndex].x;
         ms.sizeY = planes[i][planeIndex].y;
         String filename = planes[i][planeIndex].filename;
-        while ((filename == null || !new Location(filename).exists()) &&
-          planeIndex < planes[i].length - 1)
+        while ((filename == null
+                || (!isReferenced && !new Location(filename).exists())
+               )
+               && planeIndex < planes[i].length - 1)
         {
           LOGGER.debug("Missing TIFF file: {}", filename);
           planeIndex++;
@@ -442,6 +452,8 @@ public class OperettaReader extends FormatReader {
   class OperettaHandler extends BaseHandler {
     // -- Fields --
 
+    private boolean isReferenced;
+
     private String currentName;
     private Plane activePlane;
 
@@ -455,6 +467,10 @@ public class OperettaReader extends FormatReader {
     private ArrayList<Plane> planes = new ArrayList<Plane>();
 
     private final StringBuilder currentValue = new StringBuilder();
+
+    public OperettaHandler(boolean isReferenced) {
+      this.isReferenced = isReferenced;
+    }
 
     // -- OperettaHandler API methods --
 
@@ -544,9 +560,13 @@ public class OperettaReader extends FormatReader {
       else if (activePlane != null) {
         if ("URL".equals(currentName)) {
           if (value.length() > 0) {
-            Location parent =
-              new Location(currentId).getAbsoluteFile().getParentFile();
-            activePlane.filename = new Location(parent, value).getAbsolutePath();
+            if (isReferenced) {
+              activePlane.filename = value;
+            } else {
+              Location parent =
+                new Location(currentId).getAbsoluteFile().getParentFile();
+              activePlane.filename = new Location(parent, value).getAbsolutePath();
+            }
           }
         }
         else if ("Row".equals(currentName)) {
