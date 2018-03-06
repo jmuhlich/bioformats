@@ -28,6 +28,7 @@ package loci.formats.in;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 
 import loci.common.DataTools;
 import loci.common.Location;
@@ -48,6 +49,7 @@ import ome.units.quantity.Length;
 import ome.xml.model.primitives.NonNegativeInteger;
 import ome.xml.model.primitives.PositiveInteger;
 
+import org.apache.commons.lang.ObjectUtils;
 import org.xml.sax.Attributes;
 
 /**
@@ -68,6 +70,7 @@ public class OperettaReader extends FormatReader {
   private Plane[][] planes;
   private MinimalTiffReader reader;
   private boolean isReferenced;
+  private HashMap<String, Boolean> fileExistsCache = new HashMap<>();
 
   // -- Constructor --
 
@@ -139,10 +142,10 @@ public class OperettaReader extends FormatReader {
     ArrayList<String> files = new ArrayList<String>();
     files.add(currentId);
     for (Plane p : planes[getSeries()]) {
-      if (p != null && p.filename != null &&
-        new Location(p.filename).exists())
-      {
-        files.add(p.filename);
+      if (p != null && p.filename != null) {
+        if (fileExists(p.filename)) {
+          files.add(p.filename);
+        }
       }
     }
 
@@ -175,7 +178,7 @@ public class OperettaReader extends FormatReader {
     if (getSeries() < planes.length && no < planes[getSeries()].length) {
       Plane p = planes[getSeries()][no];
 
-      if (p != null && p.filename != null && new Location(p.filename).exists()) {
+      if (p != null && p.filename != null && fileExists(p.filename)) {
         if (reader == null) {
           reader = new MinimalTiffReader();
         }
@@ -331,7 +334,7 @@ public class OperettaReader extends FormatReader {
         ms.sizeY = planes[i][planeIndex].y;
         String filename = planes[i][planeIndex].filename;
         while ((filename == null
-                || (!isReferenced && !new Location(filename).exists())
+                || (!isReferenced && !fileExists(filename))
                )
                && planeIndex < planes[i].length - 1)
         {
@@ -340,24 +343,31 @@ public class OperettaReader extends FormatReader {
           filename = planes[i][planeIndex].filename;
         }
 
-        if (filename != null && new Location(filename).exists()) {
-          RandomAccessInputStream s =
-            new RandomAccessInputStream(filename, 16);
-          TiffParser parser = new TiffParser(s);
-          parser.setDoCaching(false);
+        boolean exists = false;
+        if (filename != null) {
+          try {
+            RandomAccessInputStream s =
+                    new RandomAccessInputStream(filename, 16);
+            TiffParser parser = new TiffParser(s);
+            parser.setDoCaching(false);
 
-          IFD firstIFD = parser.getFirstIFD();
-          ms.littleEndian = firstIFD.isLittleEndian();
-          ms.pixelType = firstIFD.getPixelType();
-          s.close();
+            IFD firstIFD = parser.getFirstIFD();
+            ms.littleEndian = firstIFD.isLittleEndian();
+            ms.pixelType = firstIFD.getPixelType();
+            s.close();
+            exists = true;
+          } catch (java.io.FileNotFoundException ignored) { }
         }
-        else if (i > 0) {
-          LOGGER.warn("Could not find valid TIFF file for series {}", i);
-          ms.littleEndian = core.get(0).littleEndian;
-          ms.pixelType = core.get(0).pixelType;
-        }
-        else {
-          LOGGER.warn("Could not find valid TIFF file for series 0; pixel type may be wrong");
+        fileExistsCache.put(filename, exists);
+        LOGGER.debug("exists: {}: {}", filename, exists);
+        if (!exists) {
+          if (i > 0) {
+            LOGGER.warn("Could not find valid TIFF file for series {}", i);
+            ms.littleEndian = core.get(0).littleEndian;
+            ms.pixelType = core.get(0).pixelType;
+          } else {
+            LOGGER.warn("Could not find valid TIFF file for series 0; pixel type may be wrong");
+          }
         }
       }
     }
@@ -445,6 +455,19 @@ public class OperettaReader extends FormatReader {
       }
 
     }
+  }
+
+  private boolean fileExists(String filename) {
+    boolean exists;
+    try {
+      exists = fileExistsCache.get(filename);
+      LOGGER.debug("FEC hit: {}", filename);
+    } catch (NullPointerException ignore) {
+      exists = new Location(filename).exists();
+      fileExistsCache.put(filename, exists);
+      LOGGER.debug("FEC miss: {}", filename);
+    }
+    return exists;
   }
 
   // -- Helper classes --
